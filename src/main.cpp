@@ -1,4 +1,3 @@
-#include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <sys/socket.h>
@@ -91,28 +90,27 @@ uint8_t LFL_to_LF(uint8_t LFL) {
 }
 
 Packet recv_packet(TCPConnect& connection) {
-	char buff[2048];
-	int bytes = recv(connection.sock, buff, 2048, 0);
-	// std::cout << "Read " << bytes << " bytes" << std::endl;
-
-	if (bytes < 5) {
+	size_t nb_bytes = connection.recv();
+	if (nb_bytes < 5) {
 		throw std::runtime_error("Error: No minimum bytes read");
 	}
 
-	const char b = buff[0];
+	auto& bytes = connection.bytes();
+
+	const uint8_t b = bytes[0];
 	const uint8_t LFL = (0b11000000 & b) >> 6;
 	const uint8_t request_id_present = (0b00100000 & b) >> 5;
 	const uint8_t packet_type = (0b00011111 & b);
-	const uint32_t magic = static_cast<uint32_t>(buff[1]) << 24
-				   | static_cast<uint32_t>(buff[2]) << 16
-				   | static_cast<uint32_t>(buff[3]) << 8
-				   | static_cast<uint32_t>(buff[4]);
+	const uint32_t magic = static_cast<uint32_t>(bytes[1]) << 24
+				   | static_cast<uint32_t>(bytes[2]) << 16
+				   | static_cast<uint32_t>(bytes[3]) << 8
+				   | static_cast<uint32_t>(bytes[4]);
 	assert(magic == 0x5852324b);
 
 	size_t current_byte = 5;
 	std::optional<uint8_t> request_id = std::nullopt;
 	if (request_id_present > 0) {
-		request_id = buff[current_byte];
+		request_id = bytes[current_byte];
 		current_byte += 1;
 	}
 
@@ -129,23 +127,25 @@ Packet recv_packet(TCPConnect& connection) {
 
 	uint32_t payload_length = 0;
 	for(uint8_t i = 0; i < LF; ++i) {
-		payload_length = ((static_cast<uint32_t>(buff[current_byte]) & 0x000000FF) << (8 * i)) | payload_length;
+		payload_length = ((static_cast<uint32_t>(bytes[current_byte]) & 0x000000FF) << (8 * i)) | payload_length;
 		current_byte += 1;
 	}
 
 	std::vector<uint8_t> payload;
 	payload.reserve(payload_length);
-	for(int i = current_byte; i < bytes; ++i) {
-		payload.push_back(buff[i]);
+	for(int i = current_byte; i < nb_bytes; ++i) {
+		payload.push_back(bytes[i]);
 	}
 
+	bytes.clear();
 	while(payload.size() < payload_length) {
-		bytes = recv(connection.sock, buff, 2048, 0);
+		nb_bytes = connection.recv();
 
 		// TODO: Handle if more data received than expected
-		for(size_t i = 0; i < bytes; ++i) {
-			payload.push_back(buff[i]);
+		for(size_t i = 0; i < bytes.size(); ++i) {
+			payload.push_back(bytes[i]);
 		}
+		bytes.clear();
 	}
 
 	return Packet{
@@ -154,7 +154,7 @@ Packet recv_packet(TCPConnect& connection) {
 		request_id,
 		magic,
 		payload_length,
-		payload
+		std::move(payload)
 	};
 }
 

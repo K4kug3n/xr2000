@@ -1,5 +1,6 @@
 #include "TCPConnect.hpp"
 
+#include <stdexcept>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -48,6 +49,10 @@ TCPConnect::TCPConnect(std::string server_adress, std::string port_str)
 	freeaddrinfo(server_info);
 }
 
+std::vector<uint8_t>& TCPConnect::bytes() {
+	return m_pending_bytes;
+}
+
 void TCPConnect::send(const std::vector<char>& data) const {
 	int bytes_send = ::send(sock, data.data(), data.size(), 0);
 	if (bytes_send < 0) {
@@ -56,3 +61,16 @@ void TCPConnect::send(const std::vector<char>& data) const {
 	std::cout << "Sent " << bytes_send << " bytes to the server" << std::endl;
 }
 
+size_t TCPConnect::recv() {
+	char buff[2048];
+	int bytes = ::recv(sock, buff, 2048, 0);
+	if (bytes <= 0) {
+		throw std::runtime_error("Error: Could not receive from the server");
+	}
+
+	for(int i = 0; i < bytes; ++i) {
+		m_pending_bytes.push_back(buff[i]);
+	}
+
+	return static_cast<size_t>(bytes);
+}
