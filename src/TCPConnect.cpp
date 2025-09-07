@@ -58,7 +58,6 @@ void TCPConnect::send(const std::vector<char>& data) const {
 	if (bytes_send < 0) {
 		throw std::runtime_error("Error: Failed to send data to server");
 	}
-	std::cout << "Sent " << bytes_send << " bytes to the server" << std::endl;
 }
 
 size_t TCPConnect::recv() {

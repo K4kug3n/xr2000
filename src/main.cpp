@@ -1,3 +1,5 @@
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <sys/socket.h>
@@ -103,6 +105,8 @@ uint8_t LF_to_LFL(uint8_t LF) {
 }
 
 Packet recv_packet(TCPConnect& connection) {
+	connection.bytes().clear();
+
 	size_t nb_bytes = connection.recv();
 	if (nb_bytes < 5) {
 		throw std::runtime_error("Error: No minimum bytes read");
@@ -181,7 +185,8 @@ void send_packet(TCPConnect& connection, const Packet& p) {
 	const bool request_id_present = p.request_id.has_value();
 
 	const size_t packet_size = 1 + 4 + static_cast<size_t>(request_id_present) + LF + payload_size;
-	std::vector<char> data(packet_size);
+	std::vector<char> data;
+	data.reserve(packet_size);
 
 	// First byte: LFL + request id present + packet type
 	data.push_back(
@@ -236,9 +241,125 @@ void handle_doc_packet(const Packet& p) {
 
 	const std::string_view doc{
 		reinterpret_cast<const char*>(p.payload.data()),
-		static_cast<size_t>(p.payload.size())
+		p.payload.size()
 	};
 	std::cout << doc << std::endl;
+}
+
+struct CredentialInfos {
+	std::vector<uint8_t> username;
+	std::vector<uint8_t> password;
+
+	void save_on_disk(std::string filepath) const {
+		std::ofstream outfile{ filepath, std::ios::binary };
+		if (!outfile.is_open()) {
+			std::runtime_error("Error: Could not open " + filepath + " to save credential");
+		}
+
+		const uint8_t username_length = username.size();
+		outfile.write(reinterpret_cast<const char*>(&username_length), sizeof(uint8_t));
+		outfile.write(reinterpret_cast<const char*>(username.data()), username.size());
+
+		const uint8_t password_length = password.size();
+		outfile.write(reinterpret_cast<const char*>(&password_length), sizeof(uint8_t));
+		outfile.write(reinterpret_cast<const char*>(password.data()), password.size());
+
+		outfile.close();
+	}
+
+	void read_on_disk(std::string filepath) {
+		std::ifstream infile{ filepath, std::ios::binary };
+		if (!infile.is_open()) {
+			std::runtime_error("Error: Could not open " + filepath + " to save credential");
+		}
+
+		uint8_t username_length;
+		infile.read(reinterpret_cast<char*>(&username_length), sizeof(username_length));
+		username.resize(username_length);
+		infile.read(reinterpret_cast<char*>(username.data()), username_length);
+
+		uint8_t password_length;
+		infile.read(reinterpret_cast<char*>(&password_length), sizeof(password_length));
+		password.resize(password_length);
+		infile.read(reinterpret_cast<char*>(password.data()), password_length);
+
+		infile.close();
+	}
+
+	void pprint() const {
+		std::cout << "Username: 0x" << std::hex;
+		for(auto v : username) {
+			std::cout << v;
+		}
+		std::cout << std::dec << std::endl;
+
+		std::cout << "Password: 0x" << std::hex;
+		for(auto v : password) {
+			std::cout << v;
+		}
+		std::cout << std::dec << std::endl;
+	}
+};
+
+CredentialInfos handle_registered_packet(const Packet& p) {
+	assert(p.type == PacketType::Registered);
+
+	size_t offset = 0;
+	const uint8_t username_length = p.payload[offset++];
+	const std::vector<uint8_t> username(p.payload.begin() + offset, p.payload.begin() + offset + username_length);
+	offset += username_length;
+
+	const uint8_t password_length = p.payload[offset++];
+	const std::vector<uint8_t> password(p.payload.begin() + offset, p.payload.begin() + offset + password_length);
+
+	return CredentialInfos {
+		username,
+		password
+	};
+}
+
+enum ResultType {
+	Success,
+	Error
+};
+
+std::ostream& operator<<(std::ostream& out, ResultType value) {
+	#define PROCESS_VAL(p) case(p): out << #p; break;
+	switch (value) {
+		PROCESS_VAL(ResultType::Success);
+		PROCESS_VAL(ResultType::Error);
+	}
+	#undef PROCESS_VAL
+
+	return out;
+}
+
+struct Result {
+	ResultType type;
+	std::optional<uint8_t> error_type;
+
+	void pprint() const {
+		std::cout << "Result {" << std::endl;
+		std::cout << "\t" << type << std::endl;
+		if (error_type.has_value()) {
+			std::cout << "\t0x" << std::hex << static_cast<int>(error_type.value()) << std::dec << std::endl;
+		}
+		std::cout << "}" << std::endl;
+	}
+};
+
+Result handle_result_packet(const Packet& p) {
+	assert(p.type == PacketType::Result);
+
+	const ResultType type = static_cast<ResultType>(p.payload.size());
+	const std::optional<uint8_t> error_type = (type == ResultType::Error)
+	                                        ? std::make_optional(p.payload[0])
+	                                        : std::nullopt;
+
+	return Result {
+		type,
+		error_type
+	 };
 }
 
 int main() {
@@ -246,12 +367,44 @@ int main() {
 	const Packet hello_packet = recv_packet(connection);
 	handle_hello_packet(hello_packet);
 
-	const Packet ask_doc = Packet{ PacketType::Help };
-	send_packet(connection, ask_doc);
-
+	send_packet(connection, Packet{ PacketType::Help });
 	const Packet doc_packet = recv_packet(connection);
-	handle_doc_packet(doc_packet);
+	// handle_doc_packet(doc_packet);
 	doc_packet.pprint();
-	
+
+	CredentialInfos credential;
+
+	const std::string credential_file{ "credential.dat" };
+	if (std::filesystem::exists(credential_file)) {
+		std::cout << "Credential file detected" << std::endl;
+
+		credential.read_on_disk(credential_file);
+		
+	} else {
+		std::cout << "Credential file not detected" << std::endl;
+
+		send_packet(connection, Packet{ PacketType::Register });
+		const Packet register_packet = recv_packet(connection);
+		switch (register_packet.type) {
+			case PacketType::Registered:
+				credential = handle_registered_packet(register_packet);
+				break;
+			case PacketType::Result : {
+				const Result error = handle_result_packet(register_packet);
+				error.pprint();
+				throw std::runtime_error("Error: Result packet received during register");
+				break;
+			}
+			default:
+				register_packet.pprint();
+				throw std::runtime_error("Error: Unexpected packet type during register");
+		}
+
+		 credential.save_on_disk(credential_file);
+	}
+
+	std::cout << "Credential:" << std::endl;
+	credential.pprint();
+
 	return 0;
 }
