@@ -104,9 +104,15 @@ uint8_t LF_to_LFL(uint8_t LF) {
 	return LF;
 }
 
-Packet recv_packet(TCPConnect& connection) {
-	connection.bytes().clear();
+template <typename T>
+T pop_and_get(std::queue<T>& collection) {
+	const T value = collection.front();
+	collection.pop();
 
+	return value;
+}
+
+Packet recv_packet(TCPConnect& connection) {
 	size_t nb_bytes = connection.recv();
 	if (nb_bytes < 5) {
 		throw std::runtime_error("Error: No minimum bytes read");
@@ -114,20 +120,17 @@ Packet recv_packet(TCPConnect& connection) {
 
 	auto& bytes = connection.bytes();
 
-	const uint8_t b = bytes[0];
+	const uint8_t b = pop_and_get(bytes);
 	const uint8_t LFL = (0b11000000 & b) >> 6;
 	const uint8_t request_id_present = (0b00100000 & b) >> 5;
 	const uint8_t packet_type = (0b00011111 & b);
-	assert(bytes[1] == Packet::Magic[0]);
-	assert(bytes[2] == Packet::Magic[1]);
-	assert(bytes[3] == Packet::Magic[2]);
-	assert(bytes[4] == Packet::Magic[3]);
+	for (size_t i = 0; i < 4; ++i) {
+		assert(pop_and_get(bytes) == Packet::Magic[i]);
+	}
 
-	size_t current_byte = 5;
 	std::optional<uint8_t> request_id = std::nullopt;
 	if (request_id_present > 0) {
-		request_id = bytes[current_byte];
-		current_byte += 1;
+		request_id = pop_and_get(bytes);
 	}
 
 	const uint8_t LF = LFL_to_LF(LFL);
@@ -140,25 +143,18 @@ Packet recv_packet(TCPConnect& connection) {
 
 	uint32_t payload_length = 0;
 	for(uint8_t i = 0; i < LF; ++i) {
-		payload_length = ((static_cast<uint32_t>(bytes[current_byte]) & 0x000000FF) << (8 * i)) | payload_length;
-		current_byte += 1;
+		payload_length = ((static_cast<uint32_t>(pop_and_get(bytes)) & 0x000000FF) << (8 * i)) | payload_length;
 	}
 
 	std::vector<uint8_t> payload;
 	payload.reserve(payload_length);
-	for(int i = current_byte; i < nb_bytes; ++i) {
-		payload.push_back(bytes[i]);
+	while(bytes.size() < payload_length) {
+		connection.recv();
 	}
 
-	bytes.clear();
-	while(payload.size() < payload_length) {
-		nb_bytes = connection.recv();
-
-		// TODO: Handle if more data received than expected
-		for(size_t i = 0; i < bytes.size(); ++i) {
-			payload.push_back(bytes[i]);
-		}
-		bytes.clear();
+	// TODO: Do a copy
+	for (size_t i = 0; i < payload_length; ++i) {
+		payload.push_back(pop_and_get(bytes));
 	}
 
 	return Packet{
@@ -366,11 +362,13 @@ int main() {
 	TCPConnect connection{ "clearsky.dev", "29438" };
 	const Packet hello_packet = recv_packet(connection);
 	handle_hello_packet(hello_packet);
+	connection.clear_bytes();
 
 	send_packet(connection, Packet{ PacketType::Help });
 	const Packet doc_packet = recv_packet(connection);
 	// handle_doc_packet(doc_packet);
 	doc_packet.pprint();
+	connection.clear_bytes();
 
 	CredentialInfos credential;
 
@@ -385,6 +383,7 @@ int main() {
 
 		send_packet(connection, Packet{ PacketType::Register });
 		const Packet register_packet = recv_packet(connection);
+		connection.clear_bytes();
 		switch (register_packet.type) {
 			case PacketType::Registered:
 				credential = handle_registered_packet(register_packet);

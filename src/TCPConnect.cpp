@@ -49,8 +49,12 @@ TCPConnect::TCPConnect(std::string server_adress, std::string port_str)
 	freeaddrinfo(server_info);
 }
 
-std::vector<uint8_t>& TCPConnect::bytes() {
+std::queue<uint8_t>& TCPConnect::bytes() {
 	return m_pending_bytes;
+}
+
+void TCPConnect::clear_bytes() {
+	m_pending_bytes = {}; // Create empty queue
 }
 
 void TCPConnect::send(const std::vector<char>& data) const {
@@ -68,7 +72,7 @@ size_t TCPConnect::recv() {
 	}
 
 	for(int i = 0; i < bytes; ++i) {
-		m_pending_bytes.push_back(buff[i]);
+		m_pending_bytes.push(buff[i]);
 	}
 
 	return static_cast<size_t>(bytes);

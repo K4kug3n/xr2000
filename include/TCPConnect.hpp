@@ -4,12 +4,14 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <queue>
 
 class TCPConnect {
 public:
 	TCPConnect(std::string server_adress, std::string port_str);
 
-	std::vector<uint8_t>& bytes();
+	std::queue<uint8_t>& bytes();
+	void clear_bytes();
 
 	size_t recv();
 	void send(const std::vector<char>& data) const;
@@ -19,7 +21,7 @@ private:
 	std::string m_server_adress;
 	std::string m_port_str;
 
-	std::vector<uint8_t> m_pending_bytes;
+	std::queue<uint8_t> m_pending_bytes;
 };
 
 #endif
