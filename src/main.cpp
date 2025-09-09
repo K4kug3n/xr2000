@@ -350,6 +350,26 @@ Result handle_result_packet(const Packet& p) {
 	return Result{ code };
 }
 
+Packet write_login_packet(const CredentialInfos& credential) {
+	const uint8_t username_length = static_cast<uint8_t>(credential.username.size());
+	const uint8_t password_length = static_cast<uint8_t>(credential.password.size());
+
+	std::vector<uint8_t> payload;
+	payload.reserve(username_length + password_length + 2);
+
+	// TODO: Use copy
+	payload.push_back(username_length);
+	for (auto v : credential.username) {
+		payload.push_back(v);
+	}
+	payload.push_back(password_length);
+	for (auto v : credential.password) {
+		payload.push_back(v);
+	}
+
+	return Packet { PacketType::Login, payload };
+}
+
 int main() {
 	TCPConnect connection{ "clearsky.dev", "29438" };
 	const Packet hello_packet = recv_packet(connection);
@@ -396,6 +416,15 @@ int main() {
 
 	std::cout << "Credential:" << std::endl;
 	credential.pprint();
+
+	send_packet(connection, write_login_packet(credential));
+	const Result login_result = handle_result_packet(recv_packet(connection));
+	if (login_result.error()) {
+		login_result.pprint();
+		throw std::runtime_error("Error: Could not login using credential");
+	}
+	const Packet status_packet = recv_packet(connection);
+	status_packet.pprint();
 
 	return 0;
 }
