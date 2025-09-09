@@ -314,32 +314,30 @@ CredentialInfos handle_registered_packet(const Packet& p) {
 	};
 }
 
-enum ResultType {
-	Success,
-	Error
-};
-
-std::ostream& operator<<(std::ostream& out, ResultType value) {
-	#define PROCESS_VAL(p) case(p): out << #p; break;
-	switch (value) {
-		PROCESS_VAL(ResultType::Success);
-		PROCESS_VAL(ResultType::Error);
-	}
-	#undef PROCESS_VAL
-
-	return out;
-}
-
 struct Result {
-	ResultType type;
-	std::optional<uint8_t> error_type;
+	uint8_t code;
+
+	bool success() const {
+		return code == 0x00;
+	}
+
+	bool error() const {
+		return !success();
+	}
+
+	std::string to_string() const {
+		switch (code) {
+			case 0x00: return "Success";
+			case 0x01: return "Already authenticated";
+			case 0x03: return "Invalid credential";
+			case 0x11: return "Registration rate limit";
+			default: return "Unknow result code";
+		}
+	}
 
 	void pprint() const {
 		std::cout << "Result {" << std::endl;
-		std::cout << "\t" << type << std::endl;
-		if (error_type.has_value()) {
-			std::cout << "\t0x" << std::hex << static_cast<int>(error_type.value()) << std::dec << std::endl;
-		}
+		std::cout << "\t" << to_string() << " (0x" << std::hex << static_cast<int>(code) << std::dec << ")" << std::endl;
 		std::cout << "}" << std::endl;
 	}
 };
@@ -347,15 +345,9 @@ struct Result {
 Result handle_result_packet(const Packet& p) {
 	assert(p.type == PacketType::Result);
 
-	const ResultType type = static_cast<ResultType>(p.payload.size());
-	const std::optional<uint8_t> error_type = (type == ResultType::Error)
-	                                        ? std::make_optional(p.payload[0])
-	                                        : std::nullopt;
+	const uint8_t code = p.payload[0];
 
-	return Result {
-		type,
-		error_type
-	 };
+	return Result{ code };
 }
 
 int main() {
