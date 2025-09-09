@@ -142,6 +142,7 @@ Packet recv_packet(TCPConnect& connection) {
 	}
 
 	uint32_t payload_length = 0;
+	// Read payload length (little endian)
 	for(uint8_t i = 0; i < LF; ++i) {
 		payload_length = ((static_cast<uint32_t>(pop_and_get(bytes)) & 0x000000FF) << (8 * i)) | payload_length;
 	}
@@ -283,13 +284,14 @@ struct CredentialInfos {
 	}
 
 	void pprint() const {
-		std::cout << "Username: 0x" << std::hex;
+		std::cout << "Credential:" << std::endl;
+		std::cout << "\tUsername: 0x" << std::hex;
 		for(auto v : username) {
 			std::cout << v;
 		}
 		std::cout << std::dec << std::endl;
 
-		std::cout << "Password: 0x" << std::hex;
+		std::cout << "\tPassword: 0x" << std::hex;
 		for(auto v : password) {
 			std::cout << v;
 		}
@@ -344,6 +346,7 @@ struct Result {
 
 Result handle_result_packet(const Packet& p) {
 	assert(p.type == PacketType::Result);
+	assert(p.payload.size() == 1);
 
 	const uint8_t code = p.payload[0];
 
@@ -370,6 +373,55 @@ Packet write_login_packet(const CredentialInfos& credential) {
 	return Packet { PacketType::Login, payload };
 }
 
+struct Status {
+	std::optional<uint32_t> nb_mails;
+	uint32_t connection_time;
+	bool authenticated;
+	bool authorized; // Tranceiver usage
+	bool configured;
+
+	void pprint() const {
+		std::cout << "Status:" << std::endl;
+		std::cout << "\tConnected since " << connection_time << "s" << std::endl;
+		std::cout << "\tAuthenticated: " << std::boolalpha << authenticated << std::dec << std::endl;
+		std::cout << "\tAuthorized: " << std::boolalpha << authorized << std::dec << std::endl;
+		std::cout << "\tConfigured: " << std::boolalpha << configured << std::dec << std::endl;
+		if (nb_mails.has_value()) {
+			std::cout << "\tNb mails: " << nb_mails.value() << std::endl;
+		}
+	}
+};
+
+Status handle_status_packet(const Packet& p) {
+	assert(p.type == PacketType::Status);
+	assert(p.payload.size() == 9);
+
+	const uint32_t nb_mails_v = ((static_cast<uint32_t>(p.payload[3]) & 0x000000FF) << 24)
+	                          | ((static_cast<uint32_t>(p.payload[2]) & 0x000000FF) << 16)
+	                          | ((static_cast<uint32_t>(p.payload[1]) & 0x000000FF) << 8)
+	                          | (static_cast<uint32_t>(p.payload[0]) & 0x000000FF);
+	const std::optional<uint32_t> nb_mail = (nb_mails_v == 0xffffffff)
+	                                      ? std::nullopt
+	                                      : std::make_optional(nb_mails_v);
+
+	const uint32_t connection_time = ((static_cast<uint32_t>(p.payload[7]) & 0x000000FF) << 24)
+	                               | ((static_cast<uint32_t>(p.payload[6]) & 0x000000FF) << 16)
+	                               | ((static_cast<uint32_t>(p.payload[5]) & 0x000000FF) << 8)
+	                               | (static_cast<uint32_t>(p.payload[4]) & 0x000000FF);
+
+	const bool authenticated = !(p.payload[8] & 0b00000100);
+	const bool authorized = !(p.payload[8] & 0b00000010);
+	const bool configured = !(p.payload[8] & 0b00000001);
+
+	return Status {
+		nb_mail,
+		connection_time,
+		authenticated,
+		authorized,
+		configured
+	};
+}
+
 int main() {
 	TCPConnect connection{ "clearsky.dev", "29438" };
 	const Packet hello_packet = recv_packet(connection);
@@ -379,7 +431,6 @@ int main() {
 	send_packet(connection, Packet{ PacketType::Help });
 	const Packet doc_packet = recv_packet(connection);
 	// handle_doc_packet(doc_packet);
-	doc_packet.pprint();
 	connection.clear_bytes();
 
 	CredentialInfos credential;
@@ -414,7 +465,6 @@ int main() {
 		 credential.save_on_disk(credential_file);
 	}
 
-	std::cout << "Credential:" << std::endl;
 	credential.pprint();
 
 	send_packet(connection, write_login_packet(credential));
@@ -423,8 +473,8 @@ int main() {
 		login_result.pprint();
 		throw std::runtime_error("Error: Could not login using credential");
 	}
-	const Packet status_packet = recv_packet(connection);
-	status_packet.pprint();
+	const Status login_status = handle_status_packet(recv_packet(connection));
+	login_status.pprint();
 
 	return 0;
 }
