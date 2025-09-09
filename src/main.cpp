@@ -333,6 +333,7 @@ struct Result {
 			case 0x01: return "Already authenticated";
 			case 0x03: return "Invalid credential";
 			case 0x11: return "Registration rate limit";
+			case 0x40: return "Mail not found";
 			default: return "Unknow result code";
 		}
 	}
@@ -422,6 +423,71 @@ Status handle_status_packet(const Packet& p) {
 	};
 }
 
+Packet write_getmail_packet(uint32_t mail_id) {
+	std::vector<uint8_t> payload;
+	payload.reserve(4);
+
+	for (size_t i = 0; i < 4; ++i) {
+		payload.push_back(
+			static_cast<uint8_t>((mail_id >> (8*i)) & 0x000000FF)
+		);
+	}
+
+	return Packet { PacketType::GetMail, payload };
+}
+
+struct Mail {
+	uint32_t id;
+	uint32_t timestamp;
+	std::string sender_username;
+	std::string content;
+
+	void pprint() const {
+		std::cout << "Mail n° " << id << std::endl;
+		std::cout << "\tSent by " << sender_username << " at " << timestamp << std::endl;
+		std::cout << "\tContent: " << content << std::endl;
+	}
+};
+
+Mail handle_mail_packet(const Packet& p) {
+	assert(p.type == PacketType::Mail);
+
+	const uint32_t id = ((static_cast<uint32_t>(p.payload[3]) & 0x000000FF) << 24)
+	                  | ((static_cast<uint32_t>(p.payload[2]) & 0x000000FF) << 16)
+	                  | ((static_cast<uint32_t>(p.payload[1]) & 0x000000FF) << 8)
+	                  | (static_cast<uint32_t>(p.payload[0]) & 0x000000FF);
+	
+	const uint32_t timestamp = ((static_cast<uint32_t>(p.payload[7]) & 0x000000FF) << 24)
+	                         | ((static_cast<uint32_t>(p.payload[6]) & 0x000000FF) << 16)
+	                         | ((static_cast<uint32_t>(p.payload[5]) & 0x000000FF) << 8)
+	                         | (static_cast<uint32_t>(p.payload[4]) & 0x000000FF);
+
+	size_t offset = 8;
+	const uint8_t username_length = p.payload[offset++];
+	// TODO: Use copy
+	std::vector<uint8_t> username;
+	for (size_t i = 0; i < username_length; ++i) {
+		username.push_back(p.payload[offset++]);
+	}
+	
+	uint32_t content_length = 0;
+	// Read payload length (little endian)
+	for(uint8_t i = 0; i < 4; ++i) {
+		content_length = ((static_cast<uint32_t>(p.payload[offset++]) & 0x000000FF) << (8 * i)) | content_length;
+	}
+	// TODO: Use copy
+	std::vector<uint8_t> content;
+	for (size_t i = 0; i < content_length; ++i) {
+		content.push_back(p.payload[offset++]);
+	}
+
+	return Mail {
+		id, timestamp,
+		std::string{ username.begin(), username.end() },
+		std::string{ content.begin(), content.end() }
+	};
+}
+
 int main() {
 	TCPConnect connection{ "clearsky.dev", "29438" };
 	const Packet hello_packet = recv_packet(connection);
@@ -475,6 +541,10 @@ int main() {
 	}
 	const Status login_status = handle_status_packet(recv_packet(connection));
 	login_status.pprint();
+
+	send_packet(connection, write_getmail_packet(1));
+	const Mail mail = handle_mail_packet(recv_packet(connection));
+	mail.pprint();
 
 	return 0;
 }
