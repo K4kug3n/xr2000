@@ -447,6 +447,20 @@ struct Mail {
 		std::cout << "\tSent by " << sender_username << " at " << timestamp << std::endl;
 		std::cout << "\tContent: " << content << std::endl;
 	}
+
+	void save_on_disk(std::string filepath) const {
+		std::ofstream outfile{ filepath, std::ios::out };
+		if (!outfile.is_open()) {
+			std::runtime_error("Error: Could not open " + filepath + " to save mail");
+		}
+
+		outfile << "Mail n°" << id << "\n";
+		outfile << "Sent by " << sender_username << " at " << timestamp << "\n";
+		outfile << "Content:" << "\n";
+		outfile << content;
+
+		outfile.close();
+	}
 };
 
 Mail handle_mail_packet(const Packet& p) {
@@ -539,12 +553,17 @@ int main() {
 		login_result.pprint();
 		throw std::runtime_error("Error: Could not login using credential");
 	}
-	const Status login_status = handle_status_packet(recv_packet(connection));
-	login_status.pprint();
+	const Status status = handle_status_packet(recv_packet(connection));
+	status.pprint();
 
-	send_packet(connection, write_getmail_packet(1));
-	const Mail mail = handle_mail_packet(recv_packet(connection));
-	mail.pprint();
+	std::cout << "Retriving " << status.nb_mails.value_or(0) << " mails" << std::endl;
+	for(uint32_t i = 1; i <= status.nb_mails.value_or(0); ++i) {
+		send_packet(connection, write_getmail_packet(i));
+		const Mail mail = handle_mail_packet(recv_packet(connection));
+
+		const std::string filename = "./mail_" + std::to_string(i) + ".txt";
+		mail.save_on_disk(filename);
+	}
 
 	return 0;
 }
