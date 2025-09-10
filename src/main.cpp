@@ -8,6 +8,7 @@
 
 #include <string_view>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 #include <cassert>
 #include <string>
@@ -595,6 +596,53 @@ std::string handle_translation_packet(const Packet& p) {
 	return std::string(p.payload.begin(), p.payload.end());
 }
 
+struct Dictionnary {
+	std::unordered_map<std::string, std::string> mapping;
+
+	bool contains(const std::string& w) {
+		return mapping.contains(w);
+	}
+
+	const std::string& operator[](const std::string& w) const {
+		return mapping.at(w);
+	}
+
+	std::string& operator[](const std::string& w) {
+		return mapping[w];
+	}
+
+	size_t size() const {
+		return mapping.size();
+	}
+
+	void save_on_disk(std::string filepath) const {
+		std::ofstream outfile{ filepath, std::ios::binary };
+		if (!outfile.is_open()) {
+			std::runtime_error("Error: Could not open " + filepath + " to save dictionnary");
+		}
+
+		for(const auto& pair : mapping) {
+			outfile << pair.first << " " << pair.second << "\n";
+		}
+
+		outfile.close();
+	}
+
+	void read_on_disk(std::string filepath) {
+		std::ifstream infile{ filepath, std::ios::binary };
+		if (!infile.is_open()) {
+			std::runtime_error("Error: Could not open " + filepath + " to read dictionnary");
+		}
+
+		std::string key, value;
+		while (infile >> key >> value) {
+			mapping[key] = value;
+		}
+
+		infile.close();
+	}
+};
+
 int main() {
 	TCPConnect connection{ "clearsky.dev", "29438" };
 	const Packet hello_packet = recv_packet(connection);
@@ -663,9 +711,21 @@ int main() {
 	if (mails.size() < 2) {
 		throw std::runtime_error("Error: No second email retrived");
 	}
+
+	Dictionnary rasvakian_dict;
+	const std::string dict_filename{ "rasvakian_dict.txt" };
+	if (std::filesystem::exists(dict_filename)) {
+		rasvakian_dict.read_on_disk(dict_filename);
+		std::cout << "Read " << rasvakian_dict.size() << " rasvakian words" << std::endl;
+	}
+
+
 	std::vector<std::string> rasvakian_words = get_unique_words(mails[1].content);
 	std::cout << rasvakian_words.size() << " words to translate" << std::endl;
 	for(size_t i = 0; i < rasvakian_words.size(); ++i) {
+		if (rasvakian_dict.contains(rasvakian_words[i]))
+			continue;
+
 		send_packet(connection, write_translate_packet(rasvakian_words[i]));
 
 		const Packet translation_result = recv_packet(connection);
@@ -678,6 +738,9 @@ int main() {
 			case PacketType::Translation: {
 				const std::string translation = handle_translation_packet(translation_result);
 				std::cout << rasvakian_words[i] << " -> " << translation << std::endl;
+				rasvakian_dict[rasvakian_words[i]] = translation;
+				// TODO: Do not write at each iteration
+				rasvakian_dict.save_on_disk(dict_filename);
 				break;
 			}
 			default:
