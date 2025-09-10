@@ -267,7 +267,7 @@ struct CredentialInfos {
 	void read_on_disk(std::string filepath) {
 		std::ifstream infile{ filepath, std::ios::binary };
 		if (!infile.is_open()) {
-			std::runtime_error("Error: Could not open " + filepath + " to save credential");
+			std::runtime_error("Error: Could not open " + filepath + " to read credential");
 		}
 
 		uint8_t username_length;
@@ -331,17 +331,20 @@ struct Result {
 		switch (code) {
 			case 0x00: return "Success";
 			case 0x01: return "Already authenticated";
+			case 0x02: return "Not autheticated";
 			case 0x03: return "Invalid credential";
+			case 0x04: return "Not authorized for tranceive";
 			case 0x11: return "Registration rate limit";
+			case 0x20: return "Tranceiver malfunction";
+			case 0x21: return "Invalid config";
 			case 0x40: return "Mail not found";
 			default: return "Unknow result code";
 		}
 	}
 
 	void pprint() const {
-		std::cout << "Result {" << std::endl;
+		std::cout << "Result:" << std::endl;
 		std::cout << "\t" << to_string() << " (0x" << std::hex << static_cast<int>(code) << std::dec << ")" << std::endl;
-		std::cout << "}" << std::endl;
 	}
 };
 
@@ -502,6 +505,66 @@ Mail handle_mail_packet(const Packet& p) {
 	};
 }
 
+struct Configuration {
+	uint32_t frequency;
+	uint32_t baudrate;
+	uint8_t modulation;
+
+	// Prevent spoil
+	void read_on_disk(const std::string& filepath) {
+		std::ifstream infile{ filepath };
+		if (!infile.is_open()) {
+			std::runtime_error("Error: Could not open " + filepath + " to read configuration");
+		}
+
+		// Prevent reading value as char
+		uint16_t temp_modulation = 0;
+		infile >> frequency;
+		infile >> baudrate;
+		infile >> temp_modulation;
+
+		modulation = static_cast<uint8_t>(temp_modulation);
+
+		infile.close();
+	}
+
+	void pprint() {
+		std::cout << "Configuration: " << std::endl;
+		std::cout << "\tFrequency: " << frequency << std::endl;
+		std::cout << "\tBaudrate: " << baudrate << std::endl;
+		std::cout << "\tModulation: ";
+		switch (modulation) {
+			case 0x00: std::cout << "AM"; break;
+			case 0x01: std::cout << "FM"; break;
+			case 0x02: std::cout << "PM"; break;
+			case 0x03: std::cout << "BPSK"; break;
+			default: std::cout << "Unknown (0x" << std::hex << static_cast<int>(modulation) << std::dec << ")";
+		}
+		std::cout << std::endl;
+	}
+};
+
+Packet write_configuration_packet(const Configuration& config) {
+	std::vector<uint8_t> payload;
+	payload.reserve(9);
+
+	for (size_t i = 0; i < 4; ++i) {
+		payload.push_back(
+			static_cast<uint8_t>((config.frequency >> (8*i)) & 0x000000FF)
+		);
+	}
+
+	for (size_t i = 0; i < 4; ++i) {
+		payload.push_back(
+			static_cast<uint8_t>((config.baudrate >> (8*i)) & 0x000000FF)
+		);
+	}
+
+	payload.push_back(config.modulation);
+
+	return Packet { PacketType::Configure, payload };
+}
+
 int main() {
 	TCPConnect connection{ "clearsky.dev", "29438" };
 	const Packet hello_packet = recv_packet(connection);
@@ -554,7 +617,6 @@ int main() {
 		throw std::runtime_error("Error: Could not login using credential");
 	}
 	const Status status = handle_status_packet(recv_packet(connection));
-	status.pprint();
 
 	std::cout << "Retriving " << status.nb_mails.value_or(0) << " mails" << std::endl;
 	for(uint32_t i = 1; i <= status.nb_mails.value_or(0); ++i) {
@@ -564,6 +626,19 @@ int main() {
 		const std::string filename = "./mail_" + std::to_string(i) + ".txt";
 		mail.save_on_disk(filename);
 	}
+
+	const std::string config_file{ "configuration.dat" };
+	if (!std::filesystem::exists(config_file)) {
+		throw std::runtime_error("Error: Configuration file not found");
+	}
+	Configuration config;
+	config.read_on_disk(config_file);
+	config.pprint();
+
+	send_packet(connection, write_configuration_packet(config));
+	const Result config_result = handle_result_packet(recv_packet(connection));
+	config_result.pprint();
+	
 
 	return 0;
 }
