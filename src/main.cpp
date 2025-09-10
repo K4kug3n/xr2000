@@ -1,6 +1,8 @@
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <sys/socket.h>
 
@@ -335,9 +337,11 @@ struct Result {
 			case 0x03: return "Invalid credential";
 			case 0x04: return "Not authorized for tranceive";
 			case 0x11: return "Registration rate limit";
+			case 0x12: return "Translation limiting";
 			case 0x20: return "Tranceiver malfunction";
 			case 0x21: return "Invalid config";
 			case 0x40: return "Mail not found";
+			case 0x50: return "Translation not found";
 			default: return "Unknow result code";
 		}
 	}
@@ -565,6 +569,32 @@ Packet write_configuration_packet(const Configuration& config) {
 	return Packet { PacketType::Configure, payload };
 }
 
+std::vector<std::string> get_unique_words(const std::string& text) {
+	std::vector<std::string> elems;
+	std::stringstream ss(text);
+	std::string item;
+    while (getline(ss, item, ' ')) {
+        elems.push_back(item);
+    }
+
+	// Keep unique words
+	const auto it = std::unique(elems.begin(), elems.end());
+	elems.resize(std::distance(elems.begin(), it));
+
+    return elems;
+}
+
+Packet write_translate_packet(const std::string& word) {
+	const std::vector<uint8_t> payload(word.begin(), word.end());
+
+	return Packet{ PacketType::Translate, payload };
+}
+
+std::string handle_translation_packet(const Packet& p) {
+	assert(p.type == PacketType::Translation);
+	return std::string(p.payload.begin(), p.payload.end());
+}
+
 int main() {
 	TCPConnect connection{ "clearsky.dev", "29438" };
 	const Packet hello_packet = recv_packet(connection);
@@ -594,7 +624,7 @@ int main() {
 			case PacketType::Registered:
 				credential = handle_registered_packet(register_packet);
 				break;
-			case PacketType::Result : {
+			case PacketType::Result: {
 				const Result error = handle_result_packet(register_packet);
 				error.pprint();
 				throw std::runtime_error("Error: Result packet received during register");
@@ -619,25 +649,54 @@ int main() {
 	const Status status = handle_status_packet(recv_packet(connection));
 
 	std::cout << "Retriving " << status.nb_mails.value_or(0) << " mails" << std::endl;
+	std::vector<Mail> mails;
 	for(uint32_t i = 1; i <= status.nb_mails.value_or(0); ++i) {
 		send_packet(connection, write_getmail_packet(i));
 		const Mail mail = handle_mail_packet(recv_packet(connection));
 
 		const std::string filename = "./mail_" + std::to_string(i) + ".txt";
 		mail.save_on_disk(filename);
+		mails.push_back(mail);
 	}
 
-	const std::string config_file{ "configuration.dat" };
-	if (!std::filesystem::exists(config_file)) {
-		throw std::runtime_error("Error: Configuration file not found");
+	// Second mail need translation
+	if (mails.size() < 2) {
+		throw std::runtime_error("Error: No second email retrived");
 	}
-	Configuration config;
-	config.read_on_disk(config_file);
-	config.pprint();
+	std::vector<std::string> rasvakian_words = get_unique_words(mails[1].content);
+	std::cout << rasvakian_words.size() << " words to translate" << std::endl;
+	for(size_t i = 0; i < rasvakian_words.size(); ++i) {
+		send_packet(connection, write_translate_packet(rasvakian_words[i]));
 
-	send_packet(connection, write_configuration_packet(config));
-	const Result config_result = handle_result_packet(recv_packet(connection));
-	config_result.pprint();
+		const Packet translation_result = recv_packet(connection);
+		switch (translation_result.type) {
+			case PacketType::Result: {
+				const Result error = handle_result_packet(translation_result);
+				error.pprint();
+				throw std::runtime_error("Error: could not translate word");
+			}
+			case PacketType::Translation: {
+				const std::string translation = handle_translation_packet(translation_result);
+				std::cout << rasvakian_words[i] << " -> " << translation << std::endl;
+				break;
+			}
+			default:
+				translation_result.pprint();
+				throw std::runtime_error("Error: Unexpected packet type during translation");
+		}
+	}
+
+	// const std::string config_file{ "configuration.dat" };
+	// if (!std::filesystem::exists(config_file)) {
+	// 	throw std::runtime_error("Error: Configuration file not found");
+	// }
+	// Configuration config;
+	// config.read_on_disk(config_file);
+	// config.pprint();
+
+	// send_packet(connection, write_configuration_packet(config));
+	// const Result config_result = handle_result_packet(recv_packet(connection));
+	// config_result.pprint();
 	
 
 	return 0;
