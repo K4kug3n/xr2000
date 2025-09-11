@@ -1,10 +1,7 @@
-#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <iterator>
 #include <stdexcept>
-#include <sys/socket.h>
 
 #include <string_view>
 #include <optional>
@@ -14,6 +11,7 @@
 #include <string>
 
 #include "TCPConnect.hpp"
+#include "StringProcess.hpp"
 
 enum class PacketType {
 	Help          = 0x00,
@@ -570,21 +568,6 @@ Packet write_configuration_packet(const Configuration& config) {
 	return Packet { PacketType::Configure, payload };
 }
 
-std::vector<std::string> get_unique_words(const std::string& text) {
-	std::vector<std::string> elems;
-	std::stringstream ss(text);
-	std::string item;
-    while (getline(ss, item, ' ')) {
-        elems.push_back(item);
-    }
-
-	// Keep unique words
-	const auto it = std::unique(elems.begin(), elems.end());
-	elems.resize(std::distance(elems.begin(), it));
-
-    return elems;
-}
-
 Packet write_translate_packet(const std::string& word) {
 	const std::vector<uint8_t> payload(word.begin(), word.end());
 
@@ -599,7 +582,7 @@ std::string handle_translation_packet(const Packet& p) {
 struct Dictionnary {
 	std::unordered_map<std::string, std::string> mapping;
 
-	bool contains(const std::string& w) {
+	bool contains(const std::string& w) const {
 		return mapping.contains(w);
 	}
 
@@ -739,14 +722,16 @@ int main() {
 				const std::string translation = handle_translation_packet(translation_result);
 				std::cout << rasvakian_words[i] << " -> " << translation << std::endl;
 				rasvakian_dict[rasvakian_words[i]] = translation;
-				// TODO: Do not write at each iteration
-				rasvakian_dict.save_on_disk(dict_filename);
 				break;
 			}
 			default:
 				translation_result.pprint();
 				throw std::runtime_error("Error: Unexpected packet type during translation");
 		}
+
+		// TODO: Do not write at each iteration
+		rasvakian_dict.save_on_disk(dict_filename);
+		std::this_thread::sleep_for(std::chrono::seconds(60));
 	}
 
 	// const std::string config_file{ "configuration.dat" };
