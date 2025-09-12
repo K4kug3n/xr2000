@@ -38,4 +38,10 @@ TEST(StringProcessTests, get_unique_words) {
 	// Not optimal, should just check existance
 	std::sort(words2.begin(), words2.end());
 	EXPECT_EQ(words2, get_unique_words(text2));
+
+	const std::string text3 = "Foo fOo FOO foo FOO";
+	std::vector<std::string> words3 = { "foo" };
+	// Not optimal, should just check existance
+	std::sort(words3.begin(), words3.end());
+	EXPECT_EQ(words3, get_unique_words(text3));
 }

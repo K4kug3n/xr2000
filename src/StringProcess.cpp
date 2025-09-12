@@ -22,6 +22,8 @@ std::vector<std::string> get_unique_words(const std::string& text) {
 	for(auto& c: cleaned) {
 		if ((c == ',') || (c == '.') || (c == ':') || (c == '-')) {
 			c = ' ';
+		} else if (std::isupper(c)) {
+			c = std::tolower(c);
 		}
 	}
 
