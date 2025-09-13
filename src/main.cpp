@@ -5,10 +5,12 @@
 
 #include <string_view>
 #include <optional>
-#include <unordered_map>
 #include <vector>
 #include <cassert>
 #include <string>
+
+#include <chrono>
+#include <thread>
 
 #include "TCPConnect.hpp"
 #include "StringProcess.hpp"
@@ -58,7 +60,6 @@ std::ostream& operator<<(std::ostream& out, PacketType value) {
 }
 
 struct Packet {
-	// static constexpr uint32_t Magic = 0x5852324b;
 	static constexpr uint8_t Magic[] = { 0x58, 0x52, 0x32, 0x4b };
 
 	PacketType type;
@@ -429,85 +430,6 @@ Status handle_status_packet(const Packet& p) {
 	};
 }
 
-Packet write_getmail_packet(uint32_t mail_id) {
-	std::vector<uint8_t> payload;
-	payload.reserve(4);
-
-	for (size_t i = 0; i < 4; ++i) {
-		payload.push_back(
-			static_cast<uint8_t>((mail_id >> (8*i)) & 0x000000FF)
-		);
-	}
-
-	return Packet { PacketType::GetMail, payload };
-}
-
-struct Mail {
-	uint32_t id;
-	uint32_t timestamp;
-	std::string sender_username;
-	std::string content;
-
-	void pprint() const {
-		std::cout << "Mail n° " << id << std::endl;
-		std::cout << "\tSent by " << sender_username << " at " << timestamp << std::endl;
-		std::cout << "\tContent: " << content << std::endl;
-	}
-
-	void save_on_disk(std::string filepath) const {
-		std::ofstream outfile{ filepath, std::ios::out };
-		if (!outfile.is_open()) {
-			std::runtime_error("Error: Could not open " + filepath + " to save mail");
-		}
-
-		outfile << "Mail n°" << id << "\n";
-		outfile << "Sent by " << sender_username << " at " << timestamp << "\n";
-		outfile << "Content:" << "\n";
-		outfile << content;
-
-		outfile.close();
-	}
-};
-
-Mail handle_mail_packet(const Packet& p) {
-	assert(p.type == PacketType::Mail);
-
-	const uint32_t id = ((static_cast<uint32_t>(p.payload[3]) & 0x000000FF) << 24)
-	                  | ((static_cast<uint32_t>(p.payload[2]) & 0x000000FF) << 16)
-	                  | ((static_cast<uint32_t>(p.payload[1]) & 0x000000FF) << 8)
-	                  | (static_cast<uint32_t>(p.payload[0]) & 0x000000FF);
-	
-	const uint32_t timestamp = ((static_cast<uint32_t>(p.payload[7]) & 0x000000FF) << 24)
-	                         | ((static_cast<uint32_t>(p.payload[6]) & 0x000000FF) << 16)
-	                         | ((static_cast<uint32_t>(p.payload[5]) & 0x000000FF) << 8)
-	                         | (static_cast<uint32_t>(p.payload[4]) & 0x000000FF);
-
-	size_t offset = 8;
-	const uint8_t username_length = p.payload[offset++];
-	// TODO: Use copy
-	std::vector<uint8_t> username;
-	for (size_t i = 0; i < username_length; ++i) {
-		username.push_back(p.payload[offset++]);
-	}
-	
-	uint32_t content_length = 0;
-	// Read payload length (little endian)
-	for(uint8_t i = 0; i < 4; ++i) {
-		content_length = ((static_cast<uint32_t>(p.payload[offset++]) & 0x000000FF) << (8 * i)) | content_length;
-	}
-	// TODO: Use copy
-	std::vector<uint8_t> content;
-	for (size_t i = 0; i < content_length; ++i) {
-		content.push_back(p.payload[offset++]);
-	}
-
-	return Mail {
-		id, timestamp,
-		std::string{ username.begin(), username.end() },
-		std::string{ content.begin(), content.end() }
-	};
-}
-
 struct Configuration {
 	uint32_t frequency;
 	uint32_t baudrate;
@@ -626,6 +548,89 @@ struct Dictionnary {
 	}
 };
 
+Packet write_getmail_packet(uint32_t mail_id) {
+	std::vector<uint8_t> payload;
+	payload.reserve(4);
+
+	for (size_t i = 0; i < 4; ++i) {
+		payload.push_back(
+			static_cast<uint8_t>((mail_id >> (8*i)) & 0x000000FF)
+		);
+	}
+
+	return Packet { PacketType::GetMail, payload };
+}
+
+struct Mail {
+	uint32_t id;
+	uint32_t timestamp;
+	std::string sender_username;
+	std::string content;
+
+	void pprint() const {
+		std::cout << "Mail n° " << id << std::endl;
+		std::cout << "\tSent by " << sender_username << " at " << timestamp << std::endl;
+		std::cout << "\tContent: " << content << std::endl;
+	}
+
+	void save_on_disk(std::string filepath) const {
+		std::ofstream outfile{ filepath, std::ios::out };
+		if (!outfile.is_open()) {
+			std::runtime_error("Error: Could not open " + filepath + " to save mail");
+		}
+
+		outfile << "Mail n°" << id << "\n";
+		outfile << "Sent by " << sender_username << " at " << timestamp << "\n";
+		outfile << "Content:" << "\n";
+		outfile << content;
+
+		outfile.close();
+	}
+
+	void translate(const Dictionnary& dict) {
+		content = ::translate(content, dict.mapping);
+	}
+};
+
+Mail handle_mail_packet(const Packet& p) {
+	assert(p.type == PacketType::Mail);
+
+	const uint32_t id = ((static_cast<uint32_t>(p.payload[3]) & 0x000000FF) << 24)
+	                  | ((static_cast<uint32_t>(p.payload[2]) & 0x000000FF) << 16)
+	                  | ((static_cast<uint32_t>(p.payload[1]) & 0x000000FF) << 8)
+	                  | (static_cast<uint32_t>(p.payload[0]) & 0x000000FF);
+	
+	const uint32_t timestamp = ((static_cast<uint32_t>(p.payload[7]) & 0x000000FF) << 24)
+	                         | ((static_cast<uint32_t>(p.payload[6]) & 0x000000FF) << 16)
+	                         | ((static_cast<uint32_t>(p.payload[5]) & 0x000000FF) << 8)
+	                         | (static_cast<uint32_t>(p.payload[4]) & 0x000000FF);
+
+	size_t offset = 8;
+	const uint8_t username_length = p.payload[offset++];
+	// TODO: Use copy
+	std::vector<uint8_t> username;
+	for (size_t i = 0; i < username_length; ++i) {
+		username.push_back(p.payload[offset++]);
+	}
+	
+	uint32_t content_length = 0;
+	// Read payload length (little endian)
+	for(uint8_t i = 0; i < 4; ++i) {
+		content_length = ((static_cast<uint32_t>(p.payload[offset++]) & 0x000000FF) << (8 * i)) | content_length;
+	}
+	// TODO: Use copy
+	std::vector<uint8_t> content;
+	for (size_t i = 0; i < content_length; ++i) {
+		content.push_back(p.payload[offset++]);
+	}
+
+	return Mail {
+		id, timestamp,
+		std::string{ username.begin(), username.end() },
+		std::string{ content.begin(), content.end() }
+	};
+}
+
 int main() {
 	TCPConnect connection{ "clearsky.dev", "29438" };
 	const Packet hello_packet = recv_packet(connection);
@@ -699,11 +704,10 @@ int main() {
 	const std::string dict_filename{ "rasvakian_dict.txt" };
 	if (std::filesystem::exists(dict_filename)) {
 		rasvakian_dict.read_on_disk(dict_filename);
-		std::cout << "Read " << rasvakian_dict.size() << " rasvakian words" << std::endl;
 	}
 
-
-	std::vector<std::string> rasvakian_words = get_unique_words(mails[1].content);
+	Mail& rasvakian_mail = mails[1];
+	std::vector<std::string> rasvakian_words = get_unique_words(rasvakian_mail.content);
 	std::cout << rasvakian_words.size() << " words to translate" << std::endl;
 	for(size_t i = 0; i < rasvakian_words.size(); ++i) {
 		if (rasvakian_dict.contains(rasvakian_words[i]))
@@ -733,6 +737,10 @@ int main() {
 		rasvakian_dict.save_on_disk(dict_filename);
 		std::this_thread::sleep_for(std::chrono::seconds(60));
 	}
+
+	rasvakian_mail.translate(rasvakian_dict);
+
+	std::cout << rasvakian_mail.content << std::endl;
 
 	// const std::string config_file{ "configuration.dat" };
 	// if (!std::filesystem::exists(config_file)) {

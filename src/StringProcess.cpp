@@ -15,12 +15,16 @@ bool has_alphanumeric(const std::string& str) {
 	}) != str.end();
 }
 
+bool is_splitter(unsigned char c) {
+	return (c == ',') || (c == '.') || (c == ':') || (c == '-') || (c == ' ') || (c == '\n') || (c == '(') || (c == ')');
+}
+
 std::vector<std::string> get_unique_words(const std::string& text) {
 	std::string cleaned = text;
 
 	// Remove useless characters
 	for(auto& c: cleaned) {
-		if ((c == ',') || (c == '.') || (c == ':') || (c == '-')) {
+		if (is_splitter(c)) {
 			c = ' ';
 		} else if (std::isupper(c)) {
 			c = std::tolower(c);
@@ -49,3 +53,34 @@ std::vector<std::string> get_unique_words(const std::string& text) {
 
     return words;
 }
+
+std::string translate(const std::string& text, const std::unordered_map<std::string, std::string>& mapping) {
+	std::ostringstream oss;
+
+	std::string word = "";
+	for (unsigned char c : text) {
+		if (is_splitter(c)) {
+			if (word != "") { // Pending word to translate
+				if (mapping.contains(word)) {
+					oss << mapping.at(word);
+				} else {
+					oss << word;
+				}
+				word = "";
+			}
+			oss << c;
+		} else {
+			word += std::tolower(c);
+		}
+	}
+
+	// Empty word
+	if (mapping.contains(word)) {
+		oss << mapping.at(word);
+	} else {
+		oss << word;
+	}
+
+	return oss.str();
+}
+

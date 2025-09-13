@@ -45,3 +45,29 @@ TEST(StringProcessTests, get_unique_words) {
 	std::sort(words3.begin(), words3.end());
 	EXPECT_EQ(words3, get_unique_words(text3));
 }
+
+TEST(StringProcessTests, translate) {
+	const std::string text1 = "foo bar baz";
+	const std::unordered_map<std::string, std::string> mapping1 {
+		{ "foo", "doo" },
+		{ "bar", "dar" },
+		{ "baz", "daz" },
+	};
+	EXPECT_EQ(translate(text1, mapping1), "doo dar daz");
+
+	const std::string text2 = "foo, bar: baz. foo-bar";
+	const std::unordered_map<std::string, std::string> mapping2 {
+		{ "foo", "doo" },
+		{ "bar", "dar" },
+		{ "baz", "daz" },
+	};
+	EXPECT_EQ(translate(text2, mapping2), "doo, dar: daz. doo-dar");
+
+	const std::string text3 = "Foo, bAr: BAZ. FOO-bar";
+	const std::unordered_map<std::string, std::string> mapping3 {
+		{ "foo", "doo" },
+		{ "bar", "dar" },
+		{ "baz", "daz" },
+	};
+	EXPECT_EQ(translate(text2, mapping2), "doo, dar: daz. doo-dar");
+}
